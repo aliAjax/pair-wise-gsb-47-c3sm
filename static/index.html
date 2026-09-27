@@ -6,10 +6,11 @@
   <title>群体伤亡医院应急扩容协调</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; }
-    main { max-width: 960px; margin: auto; }
+    main { max-width: 1020px; margin: auto; }
     button { padding: .55rem .9rem; cursor: pointer; }
     pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
-    .row { display: flex; gap: 1rem; align-items: center; }
+    .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-bottom: .6rem; }
+    h2 { margin-top: 2rem; border-top: 1px solid #d9dee4; padding-top: 1rem; }
   </style>
 </head>
 <body>
@@ -17,17 +18,96 @@
   <h1>群体伤亡医院应急扩容协调</h1>
   <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
   <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
+
+  <h2>化学事故分区接收台</h2>
+  <div class="row">
+    <button id="chem-pools">洗消池</button>
+    <button id="chem-batches">批次列表</button>
+    <button id="chem-demo">完整接收演示（红伤员：预占→洗消→复核收治）</button>
+    <button id="chem-fault">演示：池位故障退回待安排区</button>
+  </div>
   <pre id="output">点击上方按钮读取服务状态。</pre>
 </main>
 <script>
-const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
-async function show(path) {
-  const response = await fetch(path, {headers});
-  const data = await response.json();
-  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo","Content-Type":"application/json"};
+async function api(path, method="GET", body, role) {
+  const h = {...headers};
+  if (role) h["X-Role"] = role;
+  const response = await fetch(path, {method, headers: h, body: body ? JSON.stringify(body) : undefined});
+  return {status: response.status, data: await response.json()};
 }
-document.getElementById("load").onclick = () => show("/api/records?limit=20");
-document.getElementById("stats").onclick = () => show("/api/stats");
+async function show(promise) {
+  const output = document.getElementById("output");
+  output.textContent = "处理中…";
+  try {
+    const result = await promise;
+    output.textContent = JSON.stringify(result, null, 2);
+  } catch (err) {
+    output.textContent = String(err);
+  }
+}
+document.getElementById("load").onclick = () => show(api("/api/records?limit=20"));
+document.getElementById("stats").onclick = () => show(api("/api/stats"));
+document.getElementById("chem-pools").onclick = () => show(api("/api/chem/pools"));
+document.getElementById("chem-batches").onclick = () => show(api("/api/chem/batches?limit=50"));
+
+function iso(hours) {
+  return new Date(Date.now() + hours * 3600 * 1000).toISOString();
+}
+async function chemDemo() {
+  const ref = "CHEM-DEMO-" + Date.now();
+  const steps = [];
+  let r = await api("/api/chem/pools", "POST", {data: {code: "DEMO-" + Date.now(), station: "MAIN", name: "演示洗消池"}}, "incident_commander");
+  steps.push(["登记洗消池", r]);
+  const pool = r.data;
+  r = await api("/api/chem/batches", "POST",
+    {reference: ref, data: {station: "MAIN", contamination_level: "heavy", triage: "red",
+                            casualty_count: 4, required_beds: 4, required_ventilators: 3}},
+    "transport_coordinator");
+  steps.push(["登记红色重伤批次（仅入待安排区，不占资源）", r]);
+  let batch = r.data;
+  r = await api(`/api/chem/batches/${batch.id}/actions/arrange`, "POST",
+    {expected_version: batch.version, data: {pool_id: pool.id, scheduled_at: iso(1), estimated_minutes: 30}},
+    "incident_commander");
+  steps.push(["安排：预占床位/呼吸机+锁定池位时段", r]);
+  batch = r.data;
+  r = await api(`/api/chem/batches/${batch.id}/actions/start_decontamination`, "POST",
+    {expected_version: batch.version, data: {}}, "decon_officer");
+  steps.push(["开始洗消（红色伤员同样必须洗消）", r]);
+  batch = r.data;
+  r = await api(`/api/chem/batches/${batch.id}/actions/review`, "POST",
+    {expected_version: batch.version, data: {decontamination_passed: true, review_note: "去污合格"}},
+    "hospital_liaison");
+  steps.push(["复核通过：预占转正式收治，释放池位", r]);
+  batch = r.data;
+  r = await api(`/api/chem/batches/${batch.id}/audit`);
+  steps.push(["批次经过（审计时间线）", r]);
+  return steps.map(([name, value]) => ({step: name, status: value.status, body: value.data}));
+}
+async function faultDemo() {
+  const stamp = Date.now();
+  const steps = [];
+  let r = await api("/api/chem/pools", "POST",
+    {data: {code: "FAULT-" + stamp, station: "MAIN", name: "故障演示池"}}, "incident_commander");
+  const pool = r.data;
+  r = await api("/api/chem/batches", "POST",
+    {reference: "CHEM-FAULT-" + stamp,
+     data: {station: "MAIN", contamination_level: "moderate", triage: "yellow",
+            casualty_count: 2, required_beds: 2, required_ventilators: 0}},
+    "transport_coordinator");
+  let batch = r.data;
+  r = await api(`/api/chem/batches/${batch.id}/actions/arrange`, "POST",
+    {expected_version: batch.version, data: {pool_id: pool.id, scheduled_at: iso(1), estimated_minutes: 25}},
+    "incident_commander");
+  batch = r.data;
+  r = await api(`/api/chem/pools/${pool.id}/fault`, "POST", {data: {note: "循环泵故障"}}, "decon_officer");
+  steps.push(["标记池位故障，批次自动退回待安排区并记缺口", r]);
+  r = await api(`/api/chem/batches/${batch.id}/audit`);
+  steps.push(["退回经过（审计时间线）", r]);
+  return steps.map(([name, value]) => ({step: name, status: value.status, body: value.data}));
+}
+document.getElementById("chem-demo").onclick = () => show(chemDemo());
+document.getElementById("chem-fault").onclick = () => show(faultDemo());
 </script>
 </body>
 </html>

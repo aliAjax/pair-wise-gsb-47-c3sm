@@ -13,8 +13,14 @@ RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
 
+CHEM_BATCH_ACTION_RE = re.compile(r"^/api/chem/batches/(\d+)/actions/([a-z_]+)$")
+CHEM_BATCH_AUDIT_RE = re.compile(r"^/api/chem/batches/(\d+)/audit$")
+CHEM_BATCH_RE = re.compile(r"^/api/chem/batches/(\d+)$")
+CHEM_POOL_RE = re.compile(r"^/api/chem/pools/(\d+)$")
+CHEM_POOL_OP_RE = re.compile(r"^/api/chem/pools/(\d+)/(fault|repair)$")
 
-def make_handler(service: Any, static_dir: Path):
+
+def make_handler(service: Any, static_dir: Path, chemical_service: Any = None):
     class Handler(BaseHTTPRequestHandler):
         server_version = "hospital-surge/1.0"
 
@@ -87,6 +93,37 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
                     return
+                if parsed.path == "/api/chem/stations":
+                    self._send(200, {"items": chemical_service.list_stations(self._actor())})
+                    return
+                if parsed.path == "/api/chem/pools":
+                    query = parse_qs(parsed.query)
+                    pools = chemical_service.list_pools(
+                        self._actor(),
+                        station=query.get("station", [None])[0],
+                        status=query.get("status", [None])[0],
+                    )
+                    self._send(200, {"items": pools})
+                    return
+                if parsed.path == "/api/chem/batches":
+                    query = parse_qs(parsed.query)
+                    batches = chemical_service.list_batches(
+                        self._actor(),
+                        state=query.get("state", [None])[0],
+                        station=query.get("station", [None])[0],
+                        created_date=query.get("date", [None])[0],
+                        limit=int(query.get("limit", ["100"])[0]),
+                    )
+                    self._send(200, {"items": batches})
+                    return
+                match = CHEM_BATCH_AUDIT_RE.match(parsed.path)
+                if match:
+                    self._send(200, {"items": chemical_service.batch_timeline(self._actor(), int(match.group(1)))})
+                    return
+                match = CHEM_BATCH_RE.match(parsed.path)
+                if match:
+                    self._send(200, chemical_service.get_batch(self._actor(), int(match.group(1))))
+                    return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
                 self._handle_error(exc)
@@ -98,6 +135,34 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/records":
                     record = service.create(self._actor(), body.get("reference", ""), body.get("data", {}))
                     self._send(201, record)
+                    return
+                if parsed.path == "/api/chem/stations":
+                    self._send(200, chemical_service.configure_station(self._actor(), body.get("data", {})))
+                    return
+                if parsed.path == "/api/chem/pools":
+                    self._send(201, chemical_service.register_pool(self._actor(), body.get("data", {})))
+                    return
+                if parsed.path == "/api/chem/batches":
+                    batch = chemical_service.register_batch(self._actor(), body.get("reference", ""), body.get("data", {}))
+                    self._send(201, batch)
+                    return
+                match = CHEM_POOL_OP_RE.match(parsed.path)
+                if match:
+                    pool_id = int(match.group(1))
+                    if match.group(2) == "fault":
+                        self._send(200, chemical_service.report_pool_fault(self._actor(), pool_id, body.get("data", {})))
+                    else:
+                        self._send(200, chemical_service.repair_pool(self._actor(), pool_id, body.get("data", {})))
+                    return
+                match = CHEM_BATCH_ACTION_RE.match(parsed.path)
+                if match:
+                    version = body.get("expected_version")
+                    if not isinstance(version, int):
+                        raise ValidationError("expected_version必须是整数")
+                    batch = chemical_service.act(
+                        self._actor(), int(match.group(1)), version, match.group(2), body.get("data", {})
+                    )
+                    self._send(200, batch)
                     return
                 match = ACTION_RE.match(parsed.path)
                 if match:
@@ -114,5 +179,5 @@ def make_handler(service: Any, static_dir: Path):
     return Handler
 
 
-def create_server(host: str, port: int, service: Any, static_dir: Path) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(service, static_dir))
+def create_server(host: str, port: int, service: Any, static_dir: Path, chemical_service: Any = None) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer((host, port), make_handler(service, static_dir, chemical_service))
