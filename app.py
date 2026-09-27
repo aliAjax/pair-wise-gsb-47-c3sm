@@ -21,7 +21,7 @@ def build_service(db_path: str) -> Service:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="群体伤亡医院应急扩容协调")
+    parser = argparse.ArgumentParser(description="化学事故分区接收台")
     parser.add_argument("--db", default=str(DEFAULT_DB), help="SQLite数据库路径")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="HTTP监听端口")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址")
@@ -33,7 +33,7 @@ def main() -> None:
     Path(args.db).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
     service = build_service(args.db)
     server = create_server(args.host, args.port, service, BASE_DIR / "static")
-    print("群体伤亡医院应急扩容协调 listening on http://%s:%s" % (args.host, args.port), flush=True)
+    print("化学事故分区接收台 listening on http://%s:%s" % (args.host, args.port), flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

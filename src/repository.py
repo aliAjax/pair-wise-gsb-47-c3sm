@@ -83,6 +83,13 @@ class Repository:
             raise NotFound("记录不存在")
         return self._row(row)
 
+    def get_by_reference(self, reference: str) -> Dict[str, Any]:
+        with self._connect() as connection:
+            row = connection.execute("SELECT * FROM records WHERE reference=?", (reference,)).fetchone()
+        if row is None:
+            raise NotFound("批次不存在")
+        return self._row(row)
+
     def list_records(self, state: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         limit = max(1, min(int(limit), 500))
         with self._connect() as connection:
@@ -126,7 +133,7 @@ class Repository:
                 (record_id, action, actor_id, int(row["version"]), json.dumps(details, ensure_ascii=False, sort_keys=True), _now()),
             )
 
-    def audit_timeline(self, record_id: int) -> List[Dict[str, Any]]:
+    def audit_timeline(self, record_id: int, date: Optional[str] = None) -> List[Dict[str, Any]]:
         self.get(record_id)
         with self._connect() as connection:
             rows = connection.execute("SELECT * FROM audit_events WHERE record_id=? ORDER BY id", (record_id,)).fetchall()
@@ -135,6 +142,8 @@ class Repository:
             item = dict(row)
             item["details"] = json.loads(item["details"])
             result.append(item)
+        if date:
+            result = [item for item in result if item["created_at"].startswith(date)]
         return result
 
     def stats(self) -> Dict[str, int]:

@@ -6,6 +6,6 @@
   "projectForm": "完整项目",
   "codeScope": "backend, frontend",
   "languages": ["Python", "HTML", "CSS", "JavaScript"],
-  "summary": "群体伤亡医院应急扩容协调服务，覆盖伤员资源需求、容量分流和冲突检查。",
+  "summary": "化学事故分区接收台：批次登记染毒等级与资源需求、洗消池时段排班、预占与正式收治分离、待安排区缺口跟踪和批次审计。",
   "containerized": false
 }

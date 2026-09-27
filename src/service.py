@@ -1,10 +1,14 @@
 """业务用例编排、权限检查与审计。"""
+import re
 from typing import Any, Dict, List, Optional
 
 from .audit import AuditRecorder
-from .domain import Actor, PermissionDenied, text
+from .domain import Actor, PermissionDenied, ValidationError, text
 from .repository import Repository
 from .rules import DomainRules
+
+
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 class Service:
@@ -27,10 +31,10 @@ class Service:
         actor = self._actor(actor)
         self._ensure_known_role(actor)
         if not self.rules.role_can_create(actor.role):
-            raise PermissionDenied("角色无权创建记录")
+            raise PermissionDenied("角色无权登记批次")
         reference = text({"reference": reference}, "reference")
         prepared = self.rules.prepare_create(payload or {})
-        self.rules.check_create_conflicts(prepared, self.repository.list_records(limit=500))
+        self.rules.check_pool_conflict(prepared, self.repository.list_records(limit=500))
         return self.repository.create(reference, self.rules.INITIAL_STATE, prepared, actor.user_id)
 
     def list_records(self, actor: Actor, state: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
@@ -52,6 +56,10 @@ class Service:
         record = self.repository.get(record_id)
         self.rules.require_transition(record, action)
         new_state, new_payload, summary = self.rules.apply_action(record, action, data or {})
+        if action == "pre_occupy":
+            self.rules.check_pre_occupy_capacity(new_payload, self.repository.list_records(limit=500), exclude_id=record_id)
+        elif action == "reschedule":
+            self.rules.check_pool_conflict(new_payload, self.repository.list_records(limit=500), exclude_id=record_id)
         return self.repository.mutate(
             record_id=record_id,
             expected_version=int(expected_version),
@@ -62,10 +70,19 @@ class Service:
             details={"summary": summary, "input": data or {}, "from": record["state"], "to": new_state},
         )
 
-    def timeline(self, actor: Actor, record_id: int) -> List[Dict[str, Any]]:
+    def timeline(self, actor: Actor, record_id: int, date: Optional[str] = None) -> List[Dict[str, Any]]:
         actor = self._actor(actor)
         self._ensure_known_role(actor)
-        return self.audit.timeline(record_id)
+        if date is not None and not DATE_RE.match(date):
+            raise ValidationError("date必须是YYYY-MM-DD格式")
+        return self.audit.timeline(record_id, date=date)
+
+    def batch_file(self, actor: Actor, reference: str) -> Dict[str, Any]:
+        actor = self._actor(actor)
+        self._ensure_known_role(actor)
+        reference = text({"reference": reference}, "reference")
+        record = self.repository.get_by_reference(reference)
+        return {"record": record, "timeline": self.audit.timeline(record["id"])}
 
     def stats(self, actor: Actor) -> Dict[str, int]:
         actor = self._actor(actor)

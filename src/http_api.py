@@ -4,7 +4,7 @@ import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .domain import Actor, DomainError, PermissionDenied, ValidationError
 
@@ -12,11 +12,12 @@ from .domain import Actor, DomainError, PermissionDenied, ValidationError
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+BATCH_RE = re.compile(r"^/api/batches/([^/]+)$")
 
 
 def make_handler(service: Any, static_dir: Path):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "hospital-surge/1.0"
+        server_version = "decon-reception/1.0"
 
         def log_message(self, fmt: str, *args: Any) -> None:
             return
@@ -65,7 +66,7 @@ def make_handler(service: Any, static_dir: Path):
             try:
                 parsed = urlparse(self.path)
                 if parsed.path == "/health":
-                    self._send(200, {"status": "ok", "service": "hospital-surge", "database": service.repository.health()})
+                    self._send(200, {"status": "ok", "service": "decon-reception", "database": service.repository.health()})
                     return
                 if parsed.path == "/":
                     page = (static_dir / "index.html").read_bytes()
@@ -82,7 +83,12 @@ def make_handler(service: Any, static_dir: Path):
                     return
                 match = AUDIT_RE.match(parsed.path)
                 if match:
-                    self._send(200, {"items": service.timeline(self._actor(), int(match.group(1)))})
+                    query = parse_qs(parsed.query)
+                    self._send(200, {"items": service.timeline(self._actor(), int(match.group(1)), date=query.get("date", [None])[0])})
+                    return
+                match = BATCH_RE.match(parsed.path)
+                if match:
+                    self._send(200, service.batch_file(self._actor(), unquote(match.group(1))))
                     return
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
